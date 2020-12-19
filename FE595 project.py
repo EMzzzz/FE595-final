@@ -1,3 +1,8 @@
+# download if need
+# nltk.download('punkt')
+# pip install gensim
+# pip install tensorflow==2.2
+# pip install pyLDAvis
 # import the libraries
 import pandas as pd
 import numpy as np
@@ -25,21 +30,18 @@ import gensim as gs
 from nltk.stem.wordnet import WordNetLemmatizer
 import stylecloud
 from itertools import chain
-
-# nltk.download('punkt')
-# pip install gensim
-# pip install tensorflow==2.2
-# pip install pyLDAvis
+from sklearn import datasets
+from sklearn.linear_model import LinearRegression
 
 # Set Input
-# the query we want to search on twitter
-twitterquery = 'from:#dowjones since:2015-12-01 until:2020-12-01'
-# #dowjones is the query you interested in, since and until is the time period you want
+# the query you want to search on twitter
+twitterquery = 'from:#dowjones since:2015-12-01 until:2020-06-01'
+# #dowjones is the tag you interested in, since and until is the time period you want
 
 ric = 'DJIA'  # the RIC of the equity/ETF/index you want
 # the date you select
 start_date = '2015-12-01'
-end_date = '2020-12-01'
+end_date = '2020-06-01'
 
 # Save Twitter data to external file
 twt_content = open('project.txt', 'w', encoding='utf-8')
@@ -108,11 +110,6 @@ equity['sentiment'] = sent_mean
 equity['sentiment'].plot(figsize=(20, 5))
 plt.title('Daily sentiment mean value')
 plt.grid()
-
-
-
-
-
 
 # Data clean
 remove_handles = lambda x: re.sub('@[^\s]+', '', x)
@@ -223,7 +220,6 @@ coherence_model = gs.models.CoherenceModel(
 coherence_score = coherence_model.get_coherence()
 print(f'Coherence Score: {coherence_score}')
 
-
 # Sentiment analysis
 # The compound score is computed by summing the valence scores of each word in the lexicon,
 # adjusted according to the rules, and then normalized to be between -1 (most extreme negative)
@@ -259,7 +255,6 @@ df2['sentiment_negative'] = sentiment_negative
 df2['sentiment_positive'] = sentiment_positive
 df2['sentiment_neutral'] = sentiment_neutral
 df2['sentiment_score_compound'] = sentiment_compound
-
 
 stock_sent = pd.DataFrame(equity, columns=['Adj Close', 'log_ret'])
 
@@ -340,6 +335,102 @@ ax2.plot(x, y2, color='g', linewidth=1, label='sentiment score')
 ax1.set_xlabel('Date')
 ax1.set_ylabel('The Daily Close Price')
 ax2.set_ylabel('Rolling-30day-average Compound Score')
+ax1.legend(loc=0)
+ax2.legend(loc=1)
+plt.show()
+
+# Training linear model
+data_X = np.array(stock_sent['roll_30_compound'][30::]).reshape(-1, 1)
+data_y = np.array(equity['Adj Close'][30::]).reshape(-1, 1)
+
+model = LinearRegression()
+model.fit(data_X, data_y)
+
+# Testing data
+twitterquery = 'from:#dowjones since:2020-07-02 until:2020-12-17'
+ric = 'DJIA'
+start_date = '2020-07-02'
+end_date = '2020-12-17'
+
+twt_content = open('project2222.txt', 'w', encoding='utf-8')
+
+for tweet in tw.TwitterSearchScraper(twitterquery).get_items():
+    date_str = tweet.date.strftime("%Y-%m-%d %H:%M:%S%z")
+    date_str = date_str[:-2] + ":" + date_str[-2:]
+    twt_content.write(date_str + "|" + tweet.content + "\n")
+twt_content.close()
+twet = []
+dates = []
+twt_content = open("project2222.txt", "r", encoding="utf-8")
+for l in twt_content:
+    line = l.split("|")
+    date_str = line[0]  # +"+00:00"
+    try:
+        date_time = dt.fromisoformat(date_str)
+        date_time = date_time.astimezone(pytz.timezone("US/Eastern"))
+        line[0] = date_time
+        line[1] = line[1][:-1]
+        twet.append(line)
+        dates.append(date_time.date())
+    except:
+        twet[-1][1] += " " + l[:-1]
+twt_content.close()
+df = pd.DataFrame(data=twet,
+                  columns=['Time', 'Tweet', 'a', 'b', 'c', 'd'])  # number of column names up to the actual situation
+df1 = df.iloc[:, 0:2]
+df1['Dates'] = dates
+# Download testing stock data
+stock_data = data.DataReader(ric, "yahoo", start_date, end_date)
+equity = pd.DataFrame(data=stock_data['Adj Close'])
+equity['log_ret'] = np.log(equity['Adj Close'].shift(-1)) - np.log(equity['Adj Close'])
+equity = equity.iloc[:-1, ]
+df1 = df.iloc[:, 0:2]
+df1['Dates'] = dates
+df1 = pd.DataFrame(df1, columns=['Dates', 'Tweet'])
+df2 = pd.DataFrame(df2, columns=['Dates', 'Tweet'])
+analyser = SentimentIntensityAnalyzer()
+sentiment_score = []
+for tweet in df2['Tweet']:
+    sentiment_score.append(analyser.polarity_scores(tweet))
+
+sentiment_compound = []
+for item in sentiment_score:
+    sentiment_compound.append(item['compound'])
+
+df2['sentiment_score_compound'] = sentiment_compound
+
+stock_sent = pd.DataFrame(equity, columns=['Adj Close', 'log_ret'])
+
+prev_d = dt.fromisoformat(start_date).date()
+mean_comp = []
+
+for date in stock_sent.index.values:
+    d = pd.to_datetime(date).date()
+    avg_c = np.mean(df2.loc[(df2.Dates <= d) & (df2.Dates > prev_d)].sentiment_score_compound)
+    if np.isnan(avg_c):
+        mean_comp.append(0)
+    else:
+        mean_comp.append(avg_c)
+    prev_d = d
+
+stock_sent['sentiment_compound_score'] = mean_comp
+
+stock_sent['roll_30_compound'] = stock_sent['sentiment_compound_score'].rolling(30).mean()
+test_score = np.array(stock_sent['roll_30_compound'][30::]).reshape(-1, 1)
+test_price = equity['Adj Close'][30::]
+
+# Show the prediction & actual price
+rcParams['figure.figsize'] = 16, 4
+x = test_price.index
+y1 = test_price
+y2 = model.predict(test_score[:, 0::])
+fig, ax1 = plt.subplots()
+ax1.plot(x, y1, color='r', linewidth=1, label='Actual price')
+ax2 = ax1.twinx()
+ax2.plot(x, y2, color='g', linewidth=1, label='prediction')
+ax1.set_xlabel('Date')
+ax1.set_ylabel('The Daily Close Price')
+ax2.set_ylabel('Prediction Price')
 ax1.legend(loc=0)
 ax2.legend(loc=1)
 plt.show()
